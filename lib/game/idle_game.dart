@@ -1,62 +1,76 @@
 import 'dart:math';
 import 'package:flame/game.dart';
+import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'damage_text.dart';
+import 'combat/combat_state.dart';
+import 'monster/monster_state.dart';
+import 'combat/damage_text.dart';
 
 enum EquipmentType { sword, axe, staff }
 
 class IdleGame extends FlameGame {
-  // ===== 기본 재화 =====
+  // ===== STATE =====
+  final CombatState combat = CombatState();
+  final MonsterState monster = MonsterState();
+
+  // ===== 배경 =====
+  SpriteComponent? background;
+
+  // ===== 재화 =====
   double gold = 0;
   final goldNotifier = ValueNotifier<double>(0);
-
-  // ===== 전투 =====
-  double baseDps = 5;
-  double bonusDps = 0;
-  double get dps => baseDps + bonusDps;
-  final dpsNotifier = ValueNotifier<double>(5);
 
   // ===== 스테이지 =====
   int stage = 1;
   final stageNotifier = ValueNotifier<int>(1);
 
-  // ===== 몬스터 HP (개념만) =====
-  double monsterMaxHp = 50;
-  double monsterHp = 50;
+  // ===== UI Notifier =====
+  final dpsNotifier = ValueNotifier<double>(5);
   final monsterHpNotifier = ValueNotifier<double>(50);
-
-  // ===== 1초 공격 타이머 (🔥 핵심) =====
-  double attackTimer = 0;
-
-  // ===== 데미지 숫자 위치 (화면 중앙) =====
-  Vector2 damageBasePosition = Vector2.zero();
+  final stageClearedOnceNotifier = ValueNotifier<bool>(false);
 
   // ===== 업그레이드 =====
   double dpsUpgradeCost = 20;
 
   // ===== NEXT STAGE =====
   bool stageClearedOnce = false;
-  final stageClearedOnceNotifier = ValueNotifier<bool>(false);
-
-  // ===== 장비 =====
-  final Map<EquipmentType, int> equipments = {
-    EquipmentType.sword: 0,
-    EquipmentType.axe: 0,
-    EquipmentType.staff: 0,
-  };
-
-  final equipmentNotifier = ValueNotifier<Map<EquipmentType, int>>({});
 
   final Random _rand = Random();
 
   bool get isBossStage => stage % 5 == 0;
 
-  // ===== 화면 크기 확정 =====
+  // ===== 데미지 텍스트 기준 위치 =====
+  Vector2 damageBasePosition = Vector2.zero();
+
+  // ===== 로드 =====
+  @override
+  Future<void> onLoad() async {
+    super.onLoad();
+
+    // 🔥 이미지 배경
+    final sprite = await loadSprite('bg_forest_pixel.png');
+
+    background = SpriteComponent(
+      sprite: sprite,
+      position: Vector2.zero(),
+      size: size,
+      priority: -10, // 항상 맨 뒤
+    );
+
+    add(background!);
+  }
+
+  // ===== 화면 크기 =====
   @override
   void onGameResize(Vector2 gameSize) {
     super.onGameResize(gameSize);
+
+    // 배경 사이즈 갱신
+    if (background != null) {
+      background!.size = gameSize;
+    }
 
     damageBasePosition = Vector2(gameSize.x / 2, gameSize.y / 2);
   }
@@ -66,47 +80,39 @@ class IdleGame extends FlameGame {
   void update(double dt) {
     super.update(dt);
 
-    attackTimer += dt;
+    if (!combat.canAttack(dt)) return;
 
-    // 🔥 1초에 한 번만 공격
-    if (attackTimer >= 1.0) {
-      attackTimer -= 1.0;
+    final damage = combat.dps;
+    final killed = monster.takeDamage(damage);
 
-      final damage = dps;
-      monsterHp -= damage;
+    // 데미지 숫자
+    camera.viewport.add(
+      DamageText(
+        position: damageBasePosition.clone()
+          ..add(Vector2(_rand.nextDouble() * 30 - 15, _rand.nextDouble() * 10)),
+        damage: damage.round(),
+      ),
+    );
 
-      // 데미지 숫자 (1초 1번)
-      camera.viewport.add(
-        DamageText(
-          position: damageBasePosition.clone()
-            ..add(
-              Vector2(_rand.nextDouble() * 30 - 15, _rand.nextDouble() * 10),
-            ),
-          damage: damage.round(),
-        ),
-      );
+    monsterHpNotifier.value = monster.hp;
+    dpsNotifier.value = combat.dps;
 
-      if (monsterHp <= 0) {
-        // 골드 드랍
-        gold += monsterMaxHp * (isBossStage ? 1.2 : 0.5);
-        goldNotifier.value = gold;
-
-        // 보스 장비 드랍
-        if (isBossStage) {
-          _tryDropEquipment();
-        }
-
-        // NEXT STAGE 버튼 활성
-        if (!stageClearedOnce) {
-          stageClearedOnce = true;
-          stageClearedOnceNotifier.value = true;
-        }
-
-        monsterHp = monsterMaxHp;
-      }
-
-      monsterHpNotifier.value = monsterHp;
+    if (killed) {
+      _onMonsterKilled();
     }
+  }
+
+  // ===== 몬스터 처치 =====
+  void _onMonsterKilled() {
+    gold += monster.maxHp * (isBossStage ? 1.2 : 0.5);
+    goldNotifier.value = gold;
+
+    if (!stageClearedOnce) {
+      stageClearedOnce = true;
+      stageClearedOnceNotifier.value = true;
+    }
+
+    monster.reset();
   }
 
   // ===== DPS 업그레이드 =====
@@ -114,11 +120,12 @@ class IdleGame extends FlameGame {
     if (gold < dpsUpgradeCost) return;
 
     gold -= dpsUpgradeCost;
-    baseDps *= 1.5;
+    goldNotifier.value = gold;
+
+    combat.upgradeDps();
     dpsUpgradeCost *= 1.8;
 
-    goldNotifier.value = gold;
-    _updateDps();
+    dpsNotifier.value = combat.dps;
   }
 
   // ===== NEXT STAGE =====
@@ -128,42 +135,13 @@ class IdleGame extends FlameGame {
     gold += stage * 10;
     goldNotifier.value = gold;
 
-    monsterMaxHp *= isBossStage ? 2.0 : 1.4;
-    monsterHp = monsterMaxHp;
+    monster.nextStage(isBoss: isBossStage);
+    monsterHpNotifier.value = monster.hp;
 
     stageNotifier.value = stage;
 
     stageClearedOnce = false;
     stageClearedOnceNotifier.value = false;
-  }
-
-  // ===== 장비 드랍 =====
-  void _tryDropEquipment() {
-    const dropChance = 0.3;
-    if (_rand.nextDouble() > dropChance) return;
-
-    final type =
-        EquipmentType.values[_rand.nextInt(EquipmentType.values.length)];
-    equipments[type] = equipments[type]! + 1;
-
-    switch (type) {
-      case EquipmentType.sword:
-        bonusDps += 5;
-        break;
-      case EquipmentType.axe:
-        bonusDps += 8;
-        break;
-      case EquipmentType.staff:
-        bonusDps += 6;
-        break;
-    }
-
-    equipmentNotifier.value = Map.from(equipments);
-    _updateDps();
-  }
-
-  void _updateDps() {
-    dpsNotifier.value = dps;
   }
 
   // ===== 오프라인 보상 =====
@@ -176,8 +154,7 @@ class IdleGame extends FlameGame {
         DateTime.fromMillisecondsSinceEpoch(last),
       );
 
-      final offlineGold = diff.inSeconds * dps;
-      gold += offlineGold;
+      gold += diff.inSeconds * combat.dps;
       goldNotifier.value = gold;
     }
   }
