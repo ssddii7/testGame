@@ -3,6 +3,8 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'damage_text.dart';
+
 enum EquipmentType { sword, axe, staff }
 
 class IdleGame extends FlameGame {
@@ -20,10 +22,16 @@ class IdleGame extends FlameGame {
   int stage = 1;
   final stageNotifier = ValueNotifier<int>(1);
 
-  // ===== 몬스터 =====
+  // ===== 몬스터 HP (개념만) =====
   double monsterMaxHp = 50;
   double monsterHp = 50;
   final monsterHpNotifier = ValueNotifier<double>(50);
+
+  // ===== 1초 공격 타이머 (🔥 핵심) =====
+  double attackTimer = 0;
+
+  // ===== 데미지 숫자 위치 (화면 중앙) =====
+  Vector2 damageBasePosition = Vector2.zero();
 
   // ===== 업그레이드 =====
   double dpsUpgradeCost = 20;
@@ -45,32 +53,60 @@ class IdleGame extends FlameGame {
 
   bool get isBossStage => stage % 5 == 0;
 
+  // ===== 화면 크기 확정 =====
+  @override
+  void onGameResize(Vector2 gameSize) {
+    super.onGameResize(gameSize);
+
+    damageBasePosition = Vector2(gameSize.x / 2, gameSize.y / 2);
+  }
+
+  // ===== 메인 루프 =====
   @override
   void update(double dt) {
     super.update(dt);
 
-    monsterHp -= dps * dt;
+    attackTimer += dt;
 
-    if (monsterHp <= 0) {
-      // 골드 드랍
-      gold += monsterMaxHp * (isBossStage ? 1.2 : 0.5);
-      goldNotifier.value = gold;
+    // 🔥 1초에 한 번만 공격
+    if (attackTimer >= 1.0) {
+      attackTimer -= 1.0;
 
-      // 보스 장비 드랍
-      if (isBossStage) {
-        _tryDropEquipment();
+      final damage = dps;
+      monsterHp -= damage;
+
+      // 데미지 숫자 (1초 1번)
+      camera.viewport.add(
+        DamageText(
+          position: damageBasePosition.clone()
+            ..add(
+              Vector2(_rand.nextDouble() * 30 - 15, _rand.nextDouble() * 10),
+            ),
+          damage: damage.round(),
+        ),
+      );
+
+      if (monsterHp <= 0) {
+        // 골드 드랍
+        gold += monsterMaxHp * (isBossStage ? 1.2 : 0.5);
+        goldNotifier.value = gold;
+
+        // 보스 장비 드랍
+        if (isBossStage) {
+          _tryDropEquipment();
+        }
+
+        // NEXT STAGE 버튼 활성
+        if (!stageClearedOnce) {
+          stageClearedOnce = true;
+          stageClearedOnceNotifier.value = true;
+        }
+
+        monsterHp = monsterMaxHp;
       }
 
-      // NEXT STAGE 버튼 활성
-      if (!stageClearedOnce) {
-        stageClearedOnce = true;
-        stageClearedOnceNotifier.value = true;
-      }
-
-      monsterHp = monsterMaxHp;
+      monsterHpNotifier.value = monsterHp;
     }
-
-    monsterHpNotifier.value = monsterHp;
   }
 
   // ===== DPS 업그레이드 =====
@@ -103,16 +139,13 @@ class IdleGame extends FlameGame {
 
   // ===== 장비 드랍 =====
   void _tryDropEquipment() {
-    const dropChance = 0.3; // 30%
-
+    const dropChance = 0.3;
     if (_rand.nextDouble() > dropChance) return;
 
     final type =
         EquipmentType.values[_rand.nextInt(EquipmentType.values.length)];
-
     equipments[type] = equipments[type]! + 1;
 
-    // 장비별 DPS 증가량
     switch (type) {
       case EquipmentType.sword:
         bonusDps += 5;
@@ -142,7 +175,9 @@ class IdleGame extends FlameGame {
       final diff = DateTime.now().difference(
         DateTime.fromMillisecondsSinceEpoch(last),
       );
-      gold += diff.inSeconds * dps;
+
+      final offlineGold = diff.inSeconds * dps;
+      gold += offlineGold;
       goldNotifier.value = gold;
     }
   }
