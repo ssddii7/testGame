@@ -17,10 +17,16 @@ class GameHud extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Column(
           children: [
+            // 🔝 상단 정보 (GOLD / STAGE / DPS)
             TopInfoBar(game: game),
-            const SizedBox(height: 16),
+
+            const Spacer(), // ← 몬스터 표시 영역 확보
+            // ❤️ 몬스터 HP (하단)
             MonsterHpBar(game: game),
-            const Spacer(),
+
+            const SizedBox(height: 12),
+
+            // ⬇️ 하단 액션 버튼
             BottomActionBar(game: game),
           ],
         ),

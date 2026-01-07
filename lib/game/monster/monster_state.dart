@@ -1,6 +1,6 @@
 class MonsterState {
-  double maxHp = 50;
-  double hp = 50;
+  double maxHp = 10;
+  double hp = 10;
 
   void reset() {
     hp = maxHp;

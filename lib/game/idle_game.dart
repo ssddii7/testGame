@@ -11,81 +11,105 @@ import 'combat/damage_text.dart';
 enum EquipmentType { sword, axe, staff }
 
 class IdleGame extends FlameGame {
-  // ===== STATE =====
   final CombatState combat = CombatState();
   final MonsterState monster = MonsterState();
 
-  // ===== 배경 =====
   SpriteComponent? background;
+  SpriteComponent? monsterSprite;
 
-  // ===== 재화 =====
   double gold = 0;
   final goldNotifier = ValueNotifier<double>(0);
 
-  // ===== 스테이지 =====
   int stage = 1;
   final stageNotifier = ValueNotifier<int>(1);
 
-  // ===== UI Notifier =====
   final dpsNotifier = ValueNotifier<double>(5);
   final monsterHpNotifier = ValueNotifier<double>(50);
   final stageClearedOnceNotifier = ValueNotifier<bool>(false);
 
-  // ===== 업그레이드 =====
   double dpsUpgradeCost = 20;
-
-  // ===== NEXT STAGE =====
   bool stageClearedOnce = false;
 
   final Random _rand = Random();
-
   bool get isBossStage => stage % 5 == 0;
 
-  // ===== 데미지 텍스트 기준 위치 =====
   Vector2 damageBasePosition = Vector2.zero();
 
-  // ===== 로드 =====
+  // ===== 연출 상태 =====
+  double hitShakeTime = 0;
+  bool isDying = false;
+  double deathAnimTime = 0;
+
   @override
   Future<void> onLoad() async {
-    super.onLoad();
-
-    // 🔥 이미지 배경
-    final sprite = await loadSprite('bg_forest_pixel.png');
+    await super.onLoad();
 
     background = SpriteComponent(
-      sprite: sprite,
-      position: Vector2.zero(),
+      sprite: await loadSprite('bg_forest_pixel.png'),
       size: size,
-      priority: -10, // 항상 맨 뒤
+      priority: -10,
     );
-
     add(background!);
+
+    monsterSprite = SpriteComponent(
+      sprite: await loadSprite('mushroom.png'),
+      size: Vector2(160, 160),
+      anchor: Anchor.center,
+      position: Vector2(size.x / 2, size.y / 2 + 80),
+    );
+    add(monsterSprite!);
+
+    monsterHpNotifier.value = monster.hp;
+    dpsNotifier.value = combat.dps;
   }
 
-  // ===== 화면 크기 =====
   @override
   void onGameResize(Vector2 gameSize) {
     super.onGameResize(gameSize);
 
-    // 배경 사이즈 갱신
-    if (background != null) {
-      background!.size = gameSize;
-    }
-
+    background?.size = gameSize;
+    monsterSprite?.position = Vector2(gameSize.x / 2, gameSize.y / 2 + 80);
     damageBasePosition = Vector2(gameSize.x / 2, gameSize.y / 2);
   }
 
-  // ===== 메인 루프 =====
   @override
   void update(double dt) {
     super.update(dt);
+
+    // =========================
+    // 사망 연출 처리
+    // =========================
+    if (isDying) {
+      deathAnimTime += dt;
+
+      final t = (deathAnimTime / 0.4).clamp(0.0, 1.0);
+
+      monsterSprite?.scale = Vector2.all(1.0 - t);
+      monsterSprite?.opacity = 1.0 - t;
+
+      if (t >= 1.0) {
+        _finishDeath();
+      }
+      return;
+    }
+
+    // =========================
+    // 피격 흔들림
+    // =========================
+    if (hitShakeTime > 0) {
+      hitShakeTime -= dt;
+      monsterSprite?.position.x = size.x / 2 + sin(hitShakeTime * 60) * 8;
+    } else {
+      monsterSprite?.position.x = size.x / 2;
+    }
 
     if (!combat.canAttack(dt)) return;
 
     final damage = combat.dps;
     final killed = monster.takeDamage(damage);
 
-    // 데미지 숫자
+    hitShakeTime = 0.15;
+
     camera.viewport.add(
       DamageText(
         position: damageBasePosition.clone()
@@ -98,24 +122,34 @@ class IdleGame extends FlameGame {
     dpsNotifier.value = combat.dps;
 
     if (killed) {
-      _onMonsterKilled();
+      _startDeath();
     }
   }
 
-  // ===== 몬스터 처치 =====
-  void _onMonsterKilled() {
-    gold += monster.maxHp * (isBossStage ? 1.2 : 0.5);
+  // ===== 사망 연출 시작 =====
+  void _startDeath() {
+    isDying = true;
+    deathAnimTime = 0;
+  }
+
+  // ===== 사망 연출 종료 =====
+  void _finishDeath() {
+    isDying = false;
+
+    gold += monster.maxHp * (isBossStage ? 5 : 2);
     goldNotifier.value = gold;
 
-    if (!stageClearedOnce) {
-      stageClearedOnce = true;
-      stageClearedOnceNotifier.value = true;
-    }
+    stageClearedOnce = true;
+    stageClearedOnceNotifier.value = true;
 
     monster.reset();
+    monsterHpNotifier.value = monster.hp;
+
+    monsterSprite?.scale = Vector2.all(1);
+    monsterSprite?.opacity = 1;
   }
 
-  // ===== DPS 업그레이드 =====
+  // ===== 업그레이드 =====
   void upgradeDps() {
     if (gold < dpsUpgradeCost) return;
 
@@ -124,21 +158,19 @@ class IdleGame extends FlameGame {
 
     combat.upgradeDps();
     dpsUpgradeCost *= 1.8;
-
     dpsNotifier.value = combat.dps;
   }
 
-  // ===== NEXT STAGE =====
+  // ===== 다음 스테이지 =====
   void goNextStage() {
     stage++;
+    stageNotifier.value = stage;
 
-    gold += stage * 10;
+    gold += stage * 20;
     goldNotifier.value = gold;
 
     monster.nextStage(isBoss: isBossStage);
     monsterHpNotifier.value = monster.hp;
-
-    stageNotifier.value = stage;
 
     stageClearedOnce = false;
     stageClearedOnceNotifier.value = false;
